@@ -44,6 +44,7 @@ const allowedOrigins = [
     'http://localhost:5173',
     'https://aiscaffolddesigner.github.io',
     'https://aiscaffolddesigner.github.io/fluffy-octo-memory',
+    'https://aiscaffolddesigner.github.io/brandnew',
     'null'
 ];
 
