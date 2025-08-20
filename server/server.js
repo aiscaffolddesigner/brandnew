@@ -382,7 +382,6 @@ app.post('/api/create-subscription', checkJwt, ensureUserExists, async (req, res
     }
 });
 
-
 app.post('/api/new-thread', checkJwt, ensureUserExists, checkUserPlan, async (req, res) => {
     console.log("Received request to /api/new-thread (protected)");
     const userId = req.auth.payload.sub;
@@ -605,4 +604,38 @@ app.use(function (err, req, res, next) {
 
 app.listen(port, () => {
     console.log(`Server listening on port ${port}`);
+});
+
+// NEW: Endpoint for Stripe Setup Intent (for UpgradePage)
+app.post('/api/create-setup-intent', checkJwt, ensureUserExists, async (req, res) => {
+    const user = req.userRecord;
+    try {
+        if (!user.stripeCustomerId) {
+            const customer = await stripe.customers.create({
+                email: user.email,
+                name: user.name,
+                metadata: {
+                    auth0Id: user.auth0Id,
+                },
+            });
+            user.stripeCustomerId = customer.id;
+            await user.save();
+        }
+
+        const setupIntent = await stripe.setupIntents.create({
+            customer: user.stripeCustomerId,
+            payment_method_types: ['card'],
+        });
+
+        res.status(200).json({
+            clientSecret: setupIntent.client_secret,
+        });
+
+    } catch (error) {
+        console.error('Error creating Setup Intent:', error);
+        res.status(500).json({
+            error: 'Failed to create Setup Intent.',
+            details: error.message
+        });
+    }
 });

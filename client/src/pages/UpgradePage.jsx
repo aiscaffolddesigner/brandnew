@@ -4,15 +4,50 @@ import { Elements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
 import CheckoutForm from '../components/CheckoutForm';
 import { useAuth0 } from '@auth0/auth0-react';
-import { useStripe } from '@stripe/react-stripe-js';
+import { useNavigate } from 'react-router-dom';
 
 const stripePromise = loadStripe(import.meta.env.VITE_APP_STRIPE_PUBLISHABLE_KEY);
 
-function UpgradePage({ onPaymentSuccess, onPaymentError }) {
+function UpgradePage() {
     const { getAccessTokenSilently } = useAuth0();
+    const navigate = useNavigate();
     const [clientSecret, setClientSecret] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [statusMessage, setStatusMessage] = useState('');
+
+    const pollForPlanStatus = async () => {
+        setStatusMessage('Payment successful! Verifying your plan update...');
+        const maxAttempts = 10;
+        let attempt = 0;
+
+        while (attempt < maxAttempts) {
+            try {
+                const token = await getAccessTokenSilently();
+                const response = await fetch(`${import.meta.env.VITE_APP_API_URL}/api/user-status`, {
+                    method: 'GET',
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    },
+                });
+
+                if (response.ok) {
+                    const userStatus = await response.json();
+                    if (userStatus.planStatus === 'premium') {
+                        setStatusMessage('Your plan has been successfully upgraded to Premium!');
+                        setTimeout(() => navigate('/'), 2000);
+                        return;
+                    }
+                }
+            } catch (err) {
+                console.error('Error polling for plan status:', err);
+            }
+            attempt++;
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+
+        setStatusMessage('Could not verify your plan status. It may take a few minutes to update.');
+    };
 
     const handleFinalizeSubscription = async (paymentMethodId) => {
         try {
@@ -32,11 +67,14 @@ function UpgradePage({ onPaymentSuccess, onPaymentError }) {
             }
 
             const data = await response.json();
-            if (onPaymentSuccess) onPaymentSuccess(data);
+            if (data.subscriptionId) {
+                // Subscription was created, now poll for plan update
+                await pollForPlanStatus();
+            }
 
         } catch (err) {
             console.error('Error finalizing subscription:', err);
-            onPaymentError(err.message);
+            setError(err.message);
         }
     };
 
@@ -46,7 +84,7 @@ function UpgradePage({ onPaymentSuccess, onPaymentError }) {
         try {
             const token = await getAccessTokenSilently();
             const stripe = await stripePromise;
-            const { setupIntent, error } = await stripe.retrieveSetupIntent(setupIntentId);
+            const { setupIntent, error } = await stripe.retrieveSetupIntent(setupIntentId, token);
 
             if (error) {
                 throw new Error(error.message);
@@ -61,7 +99,6 @@ function UpgradePage({ onPaymentSuccess, onPaymentError }) {
         } catch (err) {
             console.error('Error finalizing redirected payment:', err);
             setError(err.message);
-            onPaymentError(err.message);
         } finally {
             setLoading(false);
         }
@@ -83,7 +120,7 @@ function UpgradePage({ onPaymentSuccess, onPaymentError }) {
                 setLoading(true);
                 setError(null);
                 const token = await getAccessTokenSilently();
-                const response = await fetch(`${import.meta.env.VITE_APP_API_URL}/api/create-payment-intent`, {
+                const response = await fetch(`${import.meta.env.VITE_APP_API_URL}/api/create-setup-intent`, {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`
@@ -100,14 +137,13 @@ function UpgradePage({ onPaymentSuccess, onPaymentError }) {
             } catch (err) {
                 console.error('Error fetching client secret:', err);
                 setError(err.message);
-                onPaymentError(err.message);
             } finally {
                 setLoading(false);
             }
         };
 
         fetchClientSecret();
-    }, [getAccessTokenSilently, onPaymentError]);
+    }, [getAccessTokenSilently, navigate]);
 
     const appearance = { theme: 'stripe' };
     const options = { clientSecret, appearance };
@@ -123,9 +159,10 @@ function UpgradePage({ onPaymentSuccess, onPaymentError }) {
     return (
         <div style={{ maxWidth: 400, margin: 'auto', padding: 20 }}>
             <h2 style={{ textAlign: 'center' }}>Upgrade to Premium</h2>
+            {statusMessage && <div style={{ textAlign: 'center', marginBottom: '20px', color: 'green' }}>{statusMessage}</div>}
             {clientSecret && stripePromise && (
                 <Elements stripe={stripePromise} options={options}>
-                    <CheckoutForm onPaymentSuccess={onPaymentSuccess} onPaymentError={onPaymentError} />
+                    <CheckoutForm onPaymentSuccess={handleFinalizeSubscription} onPaymentError={setError} />
                 </Elements>
             )}
             {!clientSecret && !loading && !error && (
