@@ -6,7 +6,7 @@ import CheckoutForm from '../components/CheckoutForm';
 import { useAuth0 } from '@auth0/auth0-react';
 import { useStripe } from '@stripe/react-stripe-js';
 
-const stripePromise = loadStripe(import.meta.env.VITE_APP_STRIPE_PUBLIC_KEY);
+const stripePromise = loadStripe(import.meta.env.VITE_APP_STRIPE_PUBLISHABLE_KEY);
 
 function UpgradePage({ onPaymentSuccess, onPaymentError }) {
     const { getAccessTokenSilently } = useAuth0();
