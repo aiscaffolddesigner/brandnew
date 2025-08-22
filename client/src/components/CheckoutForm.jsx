@@ -8,7 +8,6 @@ function CheckoutForm({ onPaymentSuccess, onPaymentError }) {
     const elements = useElements();
     const [loading, setLoading] = useState(false);
     const [paymentStatus, setPaymentStatus] = useState(null);
-
     const { user, getAccessTokenSilently, isAuthenticated } = useAuth0();
     const [billingName, setBillingName] = useState(user?.name || '');
 
@@ -55,8 +54,8 @@ function CheckoutForm({ onPaymentSuccess, onPaymentError }) {
             const { setupIntent, error } = await stripe.confirmSetup({
                 elements,
                 confirmParams: {
-                    // CORRECT: Update the return_url to include the subdirectory
-                    return_url: `${window.location.origin}/fluffy-octo-memory/`,
+                    // Change the return_url to the base URL
+                    return_url: `${window.location.origin}/`,
                     payment_method_data: {
                         billing_details: {
                             name: billingName,
@@ -73,7 +72,7 @@ function CheckoutForm({ onPaymentSuccess, onPaymentError }) {
             }
 
             if (setupIntent.status === 'succeeded') {
-                await handleFinalizeSubscription(setupIntent.payment_method);
+                if (onPaymentSuccess) await onPaymentSuccess(setupIntent.payment_method);
             } else {
                 setPaymentStatus('failed');
                 if (onPaymentError) onPaymentError(`Setup failed with status: ${setupIntent.status}`);
@@ -130,7 +129,6 @@ function CheckoutForm({ onPaymentSuccess, onPaymentError }) {
             >
                 {loading ? 'Processing...' : 'Pay £7.99 (renewed monthly)'}
             </button>
-
             {paymentStatus === 'succeeded' && <div style={{ color: 'green', marginTop: '10px' }}>Subscription Successful!</div>}
             {paymentStatus === 'failed' && <div style={{ color: 'red', marginTop: '10px' }}>Payment Failed. Please try again.</div>}
             {paymentStatus === 'processing' && <div style={{ color: '#666', marginTop: '10px' }}>Processing payment...</div>}

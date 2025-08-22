@@ -1,4 +1,3 @@
-// server.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -45,7 +44,7 @@ const allowedOrigins = [
     'https://aiscaffolddesigner.github.io',
     'https://aiscaffolddesigner.github.io/fluffy-octo-memory',
     'https://aiscaffolddesigner.github.io/brandnew',
-    'https://brandnew-4kvw.onrender.com' ,
+    'https://brandnew-4kvw.onrender.com',
     'null'
 ];
 
@@ -113,10 +112,34 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
 
     // Handle the event
     switch (event.type) {
-        case 'customer.subscription.created':
+        case 'checkout.session.completed':
+            const session = event.data.object;
+            const userId = session.metadata.userId; // Get the userId from metadata
+
+            if (!userId) {
+                console.error("Webhook: Missing userId in metadata.");
+                return res.status(400).send('Webhook Error: Missing userId in metadata.');
+            }
+
+            try {
+                const user = await User.findById(userId);
+                if (user) {
+                    user.planStatus = 'premium';
+                    user.stripeSubscriptionId = session.subscription;
+                    user.trialEndsAt = null; // Clear trial fields
+                    await user.save();
+                    console.log(`User ${user.auth0Id} plan updated to premium via webhook.`);
+                } else {
+                    console.warn(`Webhook: User not found for ID ${userId}.`);
+                }
+            } catch (err) {
+                console.error('Webhook: Error updating user plan:', err);
+                return res.status(500).send('Internal Server Error');
+            }
+            break;
+
         case 'customer.subscription.updated':
             const subscription = event.data.object;
-            console.log(`Subscription ${subscription.id} status is now ${subscription.status}`);
             try {
                 const customerId = subscription.customer;
                 const user = await User.findOne({ stripeCustomerId: customerId });
@@ -138,7 +161,7 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
                     user.stripeSubscriptionId = subscription.id;
                     user.trialEndsAt = trialEndsAt;
                     await user.save();
-                    console.log(`User ${user.auth0Id} plan updated to ${user.planStatus} via webhook.`);
+                    console.log(`User ${user.auth0Id} plan updated to ${user.planStatus} via subscription webhook.`);
                 } else {
                     console.warn(`User not found for Stripe customer ID ${customerId}.`);
                 }
@@ -164,11 +187,6 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
             } catch (err) {
                 console.error('Error updating user on subscription deleted webhook:', err);
             }
-            break;
-
-        case 'invoice.paid':
-            const invoice = event.data.object;
-            console.log(`Invoice ${invoice.id} for customer ${invoice.customer} was paid.`);
             break;
 
         case 'invoice.payment_failed':
@@ -206,12 +224,22 @@ const ensureUserExists = async (req, res, next) => {
 
         if (!user) {
             console.log(`NEW USER: ${auth0Id}. Creating trial account.`);
+            
+            // NEW: Create a Stripe customer at the same time
+            const customer = await stripe.customers.create({
+                email: email,
+                name: name,
+                metadata: { auth0Id: auth0Id },
+            });
+            console.log(`New Stripe customer created: ${customer.id}`);
+
             user = new User({
                 auth0Id,
                 email,
                 name,
                 planStatus: 'trial',
-                trialEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+                trialEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+                stripeCustomerId: customer.id, // Save the new Stripe customer ID
             });
             await user.save();
             console.log(`Trial account created for ${auth0Id}, trial ends: ${user.trialEndsAt}`);
@@ -219,6 +247,16 @@ const ensureUserExists = async (req, res, next) => {
             console.log(`EXISTING USER: ${auth0Id}, Plan: ${user.planStatus}, Trial ends: ${user.trialEndsAt}`);
             if (!user.email && email) user.email = email;
             if (!user.name && name) user.name = name;
+            // NEW: Backfill stripeCustomerId if it doesn't exist
+            if (!user.stripeCustomerId) {
+                 const customer = await stripe.customers.create({
+                    email: user.email,
+                    name: user.name,
+                    metadata: { auth0Id: user.auth0Id },
+                });
+                user.stripeCustomerId = customer.id;
+                console.log(`Backfilled Stripe customer ID ${customer.id} for user ${auth0Id}`);
+            }
             await user.save();
         }
 
@@ -285,102 +323,40 @@ app.get('/api/user-status', checkJwt, ensureUserExists, async (req, res) => {
     });
 });
 
-// FIXED: Endpoint to create a Setup Intent for the checkout form
-app.post('/api/create-payment-intent', checkJwt, ensureUserExists, async (req, res) => {
+// NEW: Endpoint to create a Stripe Checkout Session
+app.post('/api/create-checkout-session', checkJwt, ensureUserExists, async (req, res) => {
     const user = req.userRecord;
     const YOUR_PRICE_ID = process.env.STRIPE_PREMIUM_PRICE_ID;
 
     try {
-        if (!user.stripeCustomerId) {
-            const customer = await stripe.customers.create({
-                email: user.email,
-                name: user.name,
-                metadata: {
-                    auth0Id: user.auth0Id,
-                },
-            });
-            user.stripeCustomerId = customer.id;
-            await user.save();
-        }
-
-        const setupIntent = await stripe.setupIntents.create({
-            customer: user.stripeCustomerId,
+        const session = await stripe.checkout.sessions.create({
+            mode: 'subscription',
             payment_method_types: ['card'],
-        });
-
-        res.status(200).json({
-            clientSecret: setupIntent.client_secret,
-        });
-
-    } catch (error) {
-        console.error('Error creating Setup Intent:', error);
-        res.status(500).json({
-            error: 'Failed to create Setup Intent.',
-            details: error.message
-        });
-    }
-});
-
-// NEW: Endpoint to create the subscription after the Setup Intent is complete
-app.post('/api/create-subscription', checkJwt, ensureUserExists, async (req, res) => {
-    const user = req.userRecord;
-    const YOUR_PRICE_ID = process.env.STRIPE_PREMIUM_PRICE_ID;
-    const { paymentMethodId } = req.body;
-
-    try {
-        if (!user.stripeCustomerId) {
-            return res.status(400).json({ error: 'Stripe customer ID not found.' });
-        }
-
-        // Attach the payment method to the customer
-        await stripe.paymentMethods.attach(paymentMethodId, {
+            line_items: [{
+                price: YOUR_PRICE_ID,
+                quantity: 1,
+            }],
             customer: user.stripeCustomerId,
-        });
-
-        // Set the payment method as the default for the customer
-        await stripe.customers.update(user.stripeCustomerId, {
-            invoice_settings: {
-                default_payment_method: paymentMethodId,
+            success_url: `${process.env.CLIENT_URL}?payment=success`,
+            cancel_url: `${process.env.CLIENT_URL}?payment=cancelled`,
+            metadata: {
+                userId: user._id.toString(),
             },
         });
 
-        // Create the subscription
-        const subscription = await stripe.subscriptions.create({
-            customer: user.stripeCustomerId,
-            items: [{ price: YOUR_PRICE_ID }],
-            expand: ['latest_invoice.payment_intent'],
-        });
-
-        const latestInvoice = subscription.latest_invoice;
-        const paymentIntent = latestInvoice.payment_intent;
-
-        if (paymentIntent && paymentIntent.status === 'succeeded') {
-            res.status(200).json({
-                message: 'Subscription successful!',
-                subscriptionId: subscription.id,
-            });
-        } else if (paymentIntent && paymentIntent.status === 'requires_action') {
-            res.status(200).json({
-                message: 'Subscription requires action.',
-                requiresAction: true,
-                paymentIntentClientSecret: paymentIntent.client_secret,
-                subscriptionId: subscription.id,
-            });
-        } else {
-            res.status(200).json({
-                message: 'Subscription created, awaiting payment.',
-                subscriptionId: subscription.id,
-                status: subscription.status,
-            });
-        }
+        res.status(200).json({ id: session.id });
     } catch (error) {
-        console.error('Error creating subscription:', error);
+        console.error('Error creating Checkout Session:', error);
         res.status(500).json({
-            error: 'Failed to create subscription.',
+            error: 'Failed to create Checkout Session.',
             details: error.message
         });
     }
 });
+
+// DEPRECATED: Old endpoints for SetupIntent and subscription are removed.
+// app.post('/api/create-payment-intent', ...)
+// app.post('/api/create-subscription', ...)
 
 app.post('/api/new-thread', checkJwt, ensureUserExists, checkUserPlan, async (req, res) => {
     console.log("Received request to /api/new-thread (protected)");
@@ -604,38 +580,4 @@ app.use(function (err, req, res, next) {
 
 app.listen(port, () => {
     console.log(`Server listening on port ${port}`);
-});
-
-// NEW: Endpoint for Stripe Setup Intent (for UpgradePage)
-app.post('/api/create-setup-intent', checkJwt, ensureUserExists, async (req, res) => {
-    const user = req.userRecord;
-    try {
-        if (!user.stripeCustomerId) {
-            const customer = await stripe.customers.create({
-                email: user.email,
-                name: user.name,
-                metadata: {
-                    auth0Id: user.auth0Id,
-                },
-            });
-            user.stripeCustomerId = customer.id;
-            await user.save();
-        }
-
-        const setupIntent = await stripe.setupIntents.create({
-            customer: user.stripeCustomerId,
-            payment_method_types: ['card'],
-        });
-
-        res.status(200).json({
-            clientSecret: setupIntent.client_secret,
-        });
-
-    } catch (error) {
-        console.error('Error creating Setup Intent:', error);
-        res.status(500).json({
-            error: 'Failed to create Setup Intent.',
-            details: error.message
-        });
-    }
 });

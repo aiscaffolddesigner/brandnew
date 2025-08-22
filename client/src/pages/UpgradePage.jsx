@@ -1,175 +1,66 @@
 // client/src/pages/UpgradePage.jsx
-import React, { useState, useEffect } from 'react';
-import { Elements } from '@stripe/react-stripe-js';
-import { loadStripe } from '@stripe/stripe-js';
-import CheckoutForm from '../components/CheckoutForm';
+import React from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
-import { useNavigate } from 'react-router-dom';
+import { useStripe } from '@stripe/react-stripe-js';
 
-const stripePromise = loadStripe(import.meta.env.VITE_APP_STRIPE_PUBLISHABLE_KEY);
+const API_BASE_URL = import.meta.env.VITE_APP_API_URL;
 
 function UpgradePage() {
     const { getAccessTokenSilently } = useAuth0();
-    const navigate = useNavigate();
-    const [clientSecret, setClientSecret] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
-    const [statusMessage, setStatusMessage] = useState('');
+    const stripe = useStripe();
 
-    const pollForPlanStatus = async () => {
-        setStatusMessage('Payment successful! Verifying your plan update...');
-        const maxAttempts = 10;
-        let attempt = 0;
-
-        while (attempt < maxAttempts) {
-            try {
-                const token = await getAccessTokenSilently();
-                const response = await fetch(`${import.meta.env.VITE_APP_API_URL}/api/user-status`, {
-                    method: 'GET',
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                    },
-                });
-
-                if (response.ok) {
-                    const userStatus = await response.json();
-                    if (userStatus.planStatus === 'premium') {
-                        setStatusMessage('Your plan has been successfully upgraded to Premium!');
-                        setTimeout(() => navigate('/'), 2000);
-                        return;
-                    }
-                }
-            } catch (err) {
-                console.error('Error polling for plan status:', err);
-            }
-            attempt++;
-            await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-
-        setStatusMessage('Could not verify your plan status. It may take a few minutes to update.');
-    };
-
-    const handleFinalizeSubscription = async (paymentMethodId) => {
+    const handleUpgrade = async () => {
         try {
             const token = await getAccessTokenSilently();
-            const response = await fetch(`${import.meta.env.VITE_APP_API_URL}/api/create-subscription`, {
+
+            // 1. Call your backend to create a Checkout Session
+            const response = await fetch(`${API_BASE_URL}/api/create-checkout-session`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ paymentMethodId }),
             });
 
             if (!response.ok) {
                 const errorData = await response.json();
-                throw new Error(errorData.error || 'Failed to create subscription on backend.');
+                throw new Error(errorData.error || 'Failed to create Checkout Session on backend.');
             }
 
-            const data = await response.json();
-            if (data.subscriptionId) {
-                // Subscription was created, now poll for plan update
-                await pollForPlanStatus();
-            }
+            const session = await response.json();
 
-        } catch (err) {
-            console.error('Error finalizing subscription:', err);
-            setError(err.message);
-        }
-    };
-
-    const finalizePaymentAfterRedirect = async (setupIntentId) => {
-        setLoading(true);
-        setError(null);
-        try {
-            const token = await getAccessTokenSilently();
-            const stripe = await stripePromise;
-            const { setupIntent, error } = await stripe.retrieveSetupIntent(setupIntentId, token);
+            // 2. Redirect to Stripe Checkout page
+            const { error } = await stripe.redirectToCheckout({
+                sessionId: session.id,
+            });
 
             if (error) {
-                throw new Error(error.message);
+                console.error('Stripe redirect error:', error.message);
+                // You can show a user-facing error message here
             }
-
-            if (setupIntent.status === 'succeeded') {
-                await handleFinalizeSubscription(setupIntent.payment_method);
-            } else {
-                throw new Error(`Setup failed with status: ${setupIntent.status}`);
-            }
-
         } catch (err) {
-            console.error('Error finalizing redirected payment:', err);
-            setError(err.message);
-        } finally {
-            setLoading(false);
+            console.error('Upgrade process failed:', err);
+            // You can show a user-facing error message here
         }
     };
 
-    useEffect(() => {
-        const urlParams = new URLSearchParams(window.location.search);
-        const setupIntentId = urlParams.get('setup_intent');
-        const redirectStatus = urlParams.get('redirect_status');
-
-        if (setupIntentId && redirectStatus === 'succeeded') {
-            finalizePaymentAfterRedirect(setupIntentId);
-            window.history.replaceState({}, document.title, window.location.pathname);
-            return;
-        }
-
-        const fetchClientSecret = async () => {
-            try {
-                setLoading(true);
-                setError(null);
-                const token = await getAccessTokenSilently();
-                const response = await fetch(`${import.meta.env.VITE_APP_API_URL}/api/create-setup-intent`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'Failed to fetch client secret from the backend.');
-                }
-
-                const data = await response.json();
-                setClientSecret(data.clientSecret);
-            } catch (err) {
-                console.error('Error fetching client secret:', err);
-                setError(err.message);
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchClientSecret();
-    }, [getAccessTokenSilently, navigate]);
-
-    const appearance = { theme: 'stripe' };
-    const options = { clientSecret, appearance };
-
-    if (loading) {
-        return <div style={{ textAlign: 'center', padding: '50px' }}>Loading...</div>;
-    }
-
-    if (error) {
-        return <div style={{ color: 'red', textAlign: 'center', padding: '50px' }}>Error: {error}</div>;
-    }
-
     return (
-        <div style={{ maxWidth: 400, margin: 'auto', padding: 20 }}>
-            <h2 style={{ textAlign: 'center' }}>Upgrade to Premium</h2>
-            {statusMessage && <div style={{ textAlign: 'center', marginBottom: '20px', color: 'green' }}>{statusMessage}</div>}
-            {clientSecret && stripePromise && (
-                <Elements stripe={stripePromise} options={options}>
-                    <CheckoutForm onPaymentSuccess={handleFinalizeSubscription} onPaymentError={setError} />
-                </Elements>
-            )}
-            {!clientSecret && !loading && !error && (
-                <div style={{ textAlign: 'center', color: '#666' }}>
-                    Failed to load payment form. Please try again.
-                </div>
-            )}
+        <div style={{ maxWidth: 400, margin: 'auto', padding: 20, textAlign: 'center' }}>
+            <h2>Upgrade to Premium</h2>
+            <p>Unlock all features with our premium plan for only £7.99/month.</p>
+            <button
+                onClick={handleUpgrade}
+                style={{
+                    padding: '10px 20px',
+                    backgroundColor: '#6772e5',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '5px',
+                    cursor: 'pointer'
+                }}
+            >
+                Proceed to Checkout
+            </button>
         </div>
     );
 }
