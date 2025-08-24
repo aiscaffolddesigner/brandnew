@@ -24,18 +24,17 @@ function App() {
     const [trialDaysRemaining, setTrialDaysRemaining] = useState(null);
     const [showUpgradeForm, setShowUpgradeForm] = useState(false);
     const [paymentStatus, setPaymentStatus] = useState(null);
-    const [threadCount, setThreadCount] = useState(0); // New state for thread count
+    const [threadCount, setThreadCount] = useState(0);
+    const [showPaymentMessage, setShowPaymentMessage] = useState(false); // NEW STATE
 
     // This effect checks the URL for payment success or failure
     useEffect(() => {
         const urlParams = new URLSearchParams(window.location.search);
         const payment = urlParams.get('payment');
-        if (payment === 'success') {
-            setPaymentStatus('success');
-            window.history.replaceState({}, document.title, window.location.pathname);
-            fetchUserPlan();
-        } else if (payment === 'cancelled') {
-            setPaymentStatus('cancelled');
+        if (payment) {
+            setPaymentStatus(payment);
+            setShowPaymentMessage(true); // SHOW NEW PAYMENT MESSAGE SCREEN
+            // Clean the URL so the message doesn't reappear on refresh
             window.history.replaceState({}, document.title, window.location.pathname);
         }
     }, []);
@@ -44,7 +43,7 @@ function App() {
         if (!isAuthenticated) {
             setUserPlan(null);
             setTrialDaysRemaining(null);
-            setThreadCount(0); // Reset thread count on logout
+            setThreadCount(0);
             return;
         }
 
@@ -66,7 +65,7 @@ function App() {
 
             const data = await res.json();
             setUserPlan(data.planStatus);
-            setThreadCount(data.threadCount || 0); // Set the thread count here
+            setThreadCount(data.threadCount || 0);
             console.log('User plan status fetched:', data.planStatus, 'Trial ends:', data.trialEndsAt, 'Thread count:', data.threadCount);
 
             if (data.planStatus === 'trial' && data.trialEndsAt) {
@@ -88,8 +87,10 @@ function App() {
     };
 
     useEffect(() => {
-        fetchUserPlan();
-    }, [isAuthenticated, getAccessTokenSilently, API_BASE_URL]);
+        if (!showPaymentMessage) { // ONLY FETCH PLAN IF NOT ON PAYMENT SCREEN
+            fetchUserPlan();
+        }
+    }, [isAuthenticated, getAccessTokenSilently, API_BASE_URL, showPaymentMessage]);
 
     useEffect(() => {
         const createNewThread = async () => {
@@ -102,7 +103,6 @@ function App() {
                 return;
             }
 
-            // Check if trial user has reached the thread limit
             if (userPlan === 'trial' && threadCount >= 10) {
                 setError('You have reached your thread limit of 10. Please upgrade your plan.');
                 return;
@@ -120,13 +120,12 @@ function App() {
                         'Authorization': `Bearer ${accessToken}`,
                     },
                 });
-                
-                // Specific handling for 403 Forbidden error from backend
+
                 if (res.status === 403) {
                     const errorData = await res.json();
                     setError(errorData.error);
                     setChatLoading(false);
-                    return; // Stop execution
+                    return;
                 }
 
                 if (!res.ok) {
@@ -142,7 +141,7 @@ function App() {
 
                 const data = await res.json();
                 setThreadId(data.threadId);
-                setThreadCount(prevCount => prevCount + 1); // Increment local thread count
+                setThreadCount(prevCount => prevCount + 1);
                 console.log('New thread created:', data.threadId);
                 setMessages([{ role: 'assistant', content: 'Hello! How can I help you today?' }]);
             } catch (err) {
@@ -231,11 +230,10 @@ function App() {
         }
     };
 
-    const handlePaymentSuccess = () => {
-        console.log('Payment successful!');
-        setShowUpgradeForm(false);
-        fetchUserPlan();
-        setError(null);
+    const handleReturnToChat = () => { // NEW FUNCTION
+        setShowPaymentMessage(false);
+        setPaymentStatus(null);
+        fetchUserPlan(); // Re-fetch plan to update UI
     };
 
     if (isLoading) {
@@ -249,6 +247,32 @@ function App() {
                 <button onClick={() => setShowUpgradeForm(false)} style={{ marginTop: '20px', padding: '8px 15px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
                     Back to Chat
                 </button>
+            </div>
+        );
+    }
+    
+    // NEW CONDITIONAL RENDER FOR PAYMENT STATUS SCREEN
+    if (isAuthenticated && showPaymentMessage) {
+        return (
+            <div style={{ maxWidth: 600, margin: 'auto', padding: 20, fontFamily: 'Arial, sans-serif', textAlign: 'center' }}>
+                {paymentStatus === 'success' && (
+                    <>
+                        <h2 style={{ color: '#28a745' }}>Payment Successful! 🎉</h2>
+                        <p>Thank you for your purchase. You are now a premium user.</p>
+                        <button onClick={handleReturnToChat} style={{ padding: '10px 20px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginTop: '20px' }}>
+                            Go to Chat
+                        </button>
+                    </>
+                )}
+                {paymentStatus === 'cancelled' && (
+                    <>
+                        <h2 style={{ color: '#dc3545' }}>Payment Cancelled. 🙁</h2>
+                        <p>You have not been charged. You can try again or return to the chat.</p>
+                        <button onClick={handleReturnToChat} style={{ padding: '10px 20px', backgroundColor: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginTop: '20px' }}>
+                            Go to Chat
+                        </button>
+                    </>
+                )}
             </div>
         );
     }
@@ -269,8 +293,7 @@ function App() {
             )}
             {isAuthenticated && (
                 <>
-                    {paymentStatus === 'success' && <div style={{ color: 'white', backgroundColor: '#28a745', padding: '10px', borderRadius: '5px', marginBottom: '15px' }}>**Payment successful!** You are now a premium user.</div>}
-                    {paymentStatus === 'cancelled' && <div style={{ color: 'white', backgroundColor: '#dc3545', padding: '10px', borderRadius: '5px', marginBottom: '15px' }}>**Payment cancelled.** You have not been charged.</div>}
+                    {/* The paymentStatus messages are now handled by the dedicated screen */}
                     {error && <div style={{ color: 'white', backgroundColor: '#dc3545', padding: '10px', borderRadius: '5px', marginBottom: '15px' }}><strong>Error:</strong> {error}</div>}
                     {userPlan === 'loading' && <div style={{ backgroundColor: '#e0e0e0', color: '#333', padding: '10px', borderRadius: '5px', marginBottom: '15px', textAlign: 'center' }}>Checking your plan status...</div>}
                     {userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining > 0 && <div style={{ backgroundColor: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', padding: '10px', borderRadius: '5px', marginBottom: '15px', textAlign: 'center' }}>You are on a free trial! **{trialDaysRemaining} day{trialDaysRemaining !== 1 ? 's' : ''} remaining.**{' '}<a href="#" onClick={(e) => { e.preventDefault(); setShowUpgradeForm(true); }} style={{ color: '#007bff', textDecoration: 'underline' }}>Upgrade now</a></div>}
