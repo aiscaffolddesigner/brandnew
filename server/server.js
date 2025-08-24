@@ -600,7 +600,7 @@ app.use(function (err, req, res, next) {
 
 // --- NEW: CATCH-ALL TO SERVE FRONTEND ---
 // Must come AFTER all other API endpoints
-const publicPath = path.join(__dirname, '..', 'client/dist');
+const publicPath = path.join(__dirname, 'client/dist');
 app.use(express.static(publicPath));
 
 app.get('*', (req, res) => {
