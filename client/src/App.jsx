@@ -24,6 +24,7 @@ function App() {
     const [trialDaysRemaining, setTrialDaysRemaining] = useState(null);
     const [showUpgradeForm, setShowUpgradeForm] = useState(false);
     const [paymentStatus, setPaymentStatus] = useState(null);
+    const [threadCount, setThreadCount] = useState(0); // New state for thread count
 
     // This effect checks the URL for payment success or failure
     useEffect(() => {
@@ -31,9 +32,8 @@ function App() {
         const payment = urlParams.get('payment');
         if (payment === 'success') {
             setPaymentStatus('success');
-            // Remove the query param from the URL to avoid showing the message on refresh
             window.history.replaceState({}, document.title, window.location.pathname);
-            fetchUserPlan(); // Re-fetch user plan to show new premium status
+            fetchUserPlan();
         } else if (payment === 'cancelled') {
             setPaymentStatus('cancelled');
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -44,6 +44,7 @@ function App() {
         if (!isAuthenticated) {
             setUserPlan(null);
             setTrialDaysRemaining(null);
+            setThreadCount(0); // Reset thread count on logout
             return;
         }
 
@@ -65,7 +66,8 @@ function App() {
 
             const data = await res.json();
             setUserPlan(data.planStatus);
-            console.log('User plan status fetched:', data.planStatus, 'Trial ends:', data.trialEndsAt);
+            setThreadCount(data.threadCount || 0); // Set the thread count here
+            console.log('User plan status fetched:', data.planStatus, 'Trial ends:', data.trialEndsAt, 'Thread count:', data.threadCount);
 
             if (data.planStatus === 'trial' && data.trialEndsAt) {
                 const trialEndDate = new Date(data.trialEndsAt);
@@ -100,6 +102,12 @@ function App() {
                 return;
             }
 
+            // Check if trial user has reached the thread limit
+            if (userPlan === 'trial' && threadCount >= 10) {
+                setError('You have reached your thread limit of 10. Please upgrade your plan.');
+                return;
+            }
+
             try {
                 setChatLoading(true);
                 setError(null);
@@ -112,6 +120,14 @@ function App() {
                         'Authorization': `Bearer ${accessToken}`,
                     },
                 });
+                
+                // Specific handling for 403 Forbidden error from backend
+                if (res.status === 403) {
+                    const errorData = await res.json();
+                    setError(errorData.error);
+                    setChatLoading(false);
+                    return; // Stop execution
+                }
 
                 if (!res.ok) {
                     const errorData = await res.json();
@@ -126,13 +142,14 @@ function App() {
 
                 const data = await res.json();
                 setThreadId(data.threadId);
+                setThreadCount(prevCount => prevCount + 1); // Increment local thread count
                 console.log('New thread created:', data.threadId);
                 setMessages([{ role: 'assistant', content: 'Hello! How can I help you today?' }]);
             } catch (err) {
                 console.error('Error creating new thread:', err);
                 let displayError = `Failed to start chat: ${err.message}.`;
-                if (err.message.includes('403') && (userPlan === 'expired' || (userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining <= 0))) {
-                    displayError = 'Your trial has expired or access is denied. Please upgrade to continue.';
+                if (err.message.includes('403')) {
+                    displayError = 'You have reached your thread limit or your plan is invalid. Please upgrade to continue.';
                 } else if (err.message.includes('401')) {
                     displayError = 'You are not authorized. Please log in again.';
                 }
@@ -145,7 +162,7 @@ function App() {
         if (isAuthenticated && !threadId && !chatLoading && userPlan !== null && userPlan !== 'loading' && userPlan !== 'error') {
             createNewThread();
         }
-    }, [isAuthenticated, getAccessTokenSilently, threadId, chatLoading, userPlan, trialDaysRemaining, API_BASE_URL]);
+    }, [isAuthenticated, getAccessTokenSilently, threadId, chatLoading, userPlan, threadCount, trialDaysRemaining, API_BASE_URL]);
 
     const sendMessage = async () => {
         const isChatDisabled = userPlan === 'expired' || (userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining <= 0);
@@ -257,6 +274,7 @@ function App() {
                     {error && <div style={{ color: 'white', backgroundColor: '#dc3545', padding: '10px', borderRadius: '5px', marginBottom: '15px' }}><strong>Error:</strong> {error}</div>}
                     {userPlan === 'loading' && <div style={{ backgroundColor: '#e0e0e0', color: '#333', padding: '10px', borderRadius: '5px', marginBottom: '15px', textAlign: 'center' }}>Checking your plan status...</div>}
                     {userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining > 0 && <div style={{ backgroundColor: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', padding: '10px', borderRadius: '5px', marginBottom: '15px', textAlign: 'center' }}>You are on a free trial! **{trialDaysRemaining} day{trialDaysRemaining !== 1 ? 's' : ''} remaining.**{' '}<a href="#" onClick={(e) => { e.preventDefault(); setShowUpgradeForm(true); }} style={{ color: '#007bff', textDecoration: 'underline' }}>Upgrade now</a></div>}
+                    {userPlan === 'trial' && <div style={{ backgroundColor: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', padding: '10px', borderRadius: '5px', marginBottom: '15px', textAlign: 'center' }}>**Threads used: {threadCount} / 10**</div>}
                     {(userPlan === 'expired' || (userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining <= 0)) && <div style={{ backgroundColor: '#f8d7da', color: '#721c24', border: '1px solid #f5c6cb', padding: '10px', borderRadius: '5px', marginBottom: '15px', textAlign: 'center' }}>Your trial has expired. Please{' '}<a href="#" onClick={(e) => { e.preventDefault(); setShowUpgradeForm(true); }} style={{ color: '#dc3545', textDecoration: 'underline' }}>upgrade to a premium plan</a> to continue.</div>}
                     {userPlan === 'premium' && <div style={{ backgroundColor: '#d4edda', color: '#155724', border: '1px solid #c3e6cb', padding: '10px', borderRadius: '5px', marginBottom: '15px', textAlign: 'center' }}>You are a premium user. Enjoy!</div>}
                     {userPlan === 'error' && <div style={{ backgroundColor: '#f8d7da', color: '#721c24', border: '1px solid #f5c6cb', padding: '10px', borderRadius: '5px', marginBottom: '15px', textAlign: 'center' }}>Failed to load your plan status. Please refresh or contact support.</div>}
@@ -282,10 +300,10 @@ function App() {
                             onChange={e => setInput(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && !chatLoading && threadId && sendMessage()}
                             style={{ flexGrow: 1, padding: '10px 15px', border: '1px solid #ccc', borderRadius: '20px', fontSize: '16px', outline: 'none' }}
-                            disabled={chatLoading || !threadId || userPlan === 'expired' || (userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining <= 0) || userPlan === 'error' || userPlan === 'loading'}
-                            placeholder={userPlan === 'loading' ? "Checking plan status..." : (userPlan === 'expired' || (userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining <= 0)) ? "Please upgrade to continue chatting." : (threadId ? "Type your message..." : "Initializing chat...")}
+                            disabled={chatLoading || !threadId || userPlan === 'expired' || (userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining <= 0) || userPlan === 'error' || userPlan === 'loading' || (userPlan === 'trial' && threadCount >= 10)}
+                            placeholder={userPlan === 'loading' ? "Checking plan status..." : (userPlan === 'expired' || (userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining <= 0) || (userPlan === 'trial' && threadCount >= 10)) ? "Please upgrade to continue chatting." : (threadId ? "Type your message..." : "Initializing chat...")}
                         />
-                        <button onClick={sendMessage} style={{ padding: '10px 20px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '20px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', transition: 'background-color 0.2s' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#0056b3'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#007bff'} disabled={chatLoading || !threadId || !input.trim() || userPlan === 'expired' || (userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining <= 0) || userPlan === 'error' || userPlan === 'loading'}>
+                        <button onClick={sendMessage} style={{ padding: '10px 20px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '20px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', transition: 'background-color 0.2s' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#0056b3'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#007bff'} disabled={chatLoading || !threadId || !input.trim() || userPlan === 'expired' || (userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining <= 0) || userPlan === 'error' || userPlan === 'loading' || (userPlan === 'trial' && threadCount >= 10)}>
                             Send
                         </button>
                     </div>

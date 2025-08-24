@@ -125,7 +125,7 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
                 const user = await User.findById(userId);
                 if (user) {
                     user.planStatus = 'premium';
-                    user.stripeSubscriptionId = session.subscription;
+                    user.subscriptionId = session.subscription; // Use subscriptionId to match User.js
                     user.trialEndsAt = null; // Clear trial fields
                     await user.save();
                     console.log(`User ${user.auth0Id} plan updated to premium via webhook.`);
@@ -158,7 +158,7 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
                     }
 
                     user.planStatus = planStatus;
-                    user.stripeSubscriptionId = subscription.id;
+                    user.subscriptionId = subscription.id; // Use subscriptionId to match User.js
                     user.trialEndsAt = trialEndsAt;
                     await user.save();
                     console.log(`User ${user.auth0Id} plan updated to ${user.planStatus} via subscription webhook.`);
@@ -179,7 +179,7 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
 
                 if (user) {
                     user.planStatus = 'expired';
-                    user.stripeSubscriptionId = null;
+                    user.subscriptionId = null; // Use subscriptionId to match User.js
                     user.trialEndsAt = null;
                     await user.save();
                     console.log(`User ${user.auth0Id} plan set to expired after subscription deletion.`);
@@ -224,7 +224,7 @@ const ensureUserExists = async (req, res, next) => {
 
         if (!user) {
             console.log(`NEW USER: ${auth0Id}. Creating trial account.`);
-            
+
             // NEW: Create a Stripe customer at the same time
             const customer = await stripe.customers.create({
                 email: email,
@@ -249,7 +249,7 @@ const ensureUserExists = async (req, res, next) => {
             if (!user.name && name) user.name = name;
             // NEW: Backfill stripeCustomerId if it doesn't exist
             if (!user.stripeCustomerId) {
-                 const customer = await stripe.customers.create({
+                const customer = await stripe.customers.create({
                     email: user.email,
                     name: user.name,
                     metadata: { auth0Id: user.auth0Id },
@@ -320,6 +320,7 @@ app.get('/api/user-status', checkJwt, ensureUserExists, async (req, res) => {
     res.status(200).json({
         planStatus: user.planStatus,
         trialEndsAt: user.trialEndsAt,
+        threadCount: user.threadCount || 0 // Added threadCount
     });
 });
 
@@ -358,12 +359,26 @@ app.post('/api/create-checkout-session', checkJwt, ensureUserExists, async (req,
 // app.post('/api/create-payment-intent', ...)
 // app.post('/api/create-subscription', ...)
 
+// --- Updated /api/new-thread endpoint to check for and increment thread count ---
 app.post('/api/new-thread', checkJwt, ensureUserExists, checkUserPlan, async (req, res) => {
-    console.log("Received request to /api/new-thread (protected)");
-    const userId = req.auth.payload.sub;
-    console.log("Authenticated user ID:", userId);
+    const user = req.userRecord;
+
+    // Define the plan limits
+    const TRIAL_THREAD_LIMIT = 10;
+    
+    // Check if the user is on a trial plan and has reached the thread limit
+    if (user.planStatus === 'trial' && user.threadCount >= TRIAL_THREAD_LIMIT) {
+        console.log(`ACCESS DENIED: User ${user.auth0Id} has reached their thread limit of ${TRIAL_THREAD_LIMIT}.`);
+        return res.status(403).json({
+            error: `You have reached your thread limit of ${TRIAL_THREAD_LIMIT}. Please upgrade your plan.`,
+            planStatus: user.planStatus
+        });
+    }
 
     try {
+        console.log("Received request to /api/new-thread (protected)");
+        const userId = req.auth.payload.sub;
+        console.log("Authenticated user ID:", userId);
         const threadCreationUrl = `${OPENAI_API_BASE_URL}/threads?api-version=${AZURE_OPENAI_API_VERSION}`;
         console.log("Creating thread at URL:", threadCreationUrl);
 
@@ -383,7 +398,13 @@ app.post('/api/new-thread', checkJwt, ensureUserExists, checkUserPlan, async (re
         }
 
         const thread = await response.json();
+
+        // After successfully creating a thread, increment the user's threadCount
+        user.threadCount += 1;
+        await user.save();
+
         console.log("New thread created:", thread.id);
+        console.log("User's new thread count:", user.threadCount);
 
         res.status(200).json({ threadId: thread.id });
 
