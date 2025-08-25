@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { auth } = require('express-oauth2-jwt-bearer');
-const path = require('path'); // ADDED: Import the 'path' module
 
 const mongoose = require('mongoose');
 const User = require('./models/User');
@@ -606,13 +605,6 @@ app.use(function (err, req, res, next) {
 
 // --- NEW: CATCH-ALL TO SERVE FRONTEND ---
 // Must come AFTER all other API endpoints
-const publicPath = path.join(__dirname, '..', 'client/dist');
-app.use(express.static(publicPath));
-
-app.get('*', (req, res) => {
-    res.sendFile(path.join(publicPath, 'index.html'));
-});
-
 // --- END NEW SECTION ---
 
 app.listen(port, () => {
