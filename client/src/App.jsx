@@ -25,7 +25,7 @@ function App() {
     const [showUpgradeForm, setShowUpgradeForm] = useState(false);
     const [paymentStatus, setPaymentStatus] = useState(null);
     const [threadCount, setThreadCount] = useState(0);
-    const [showPaymentMessage, setShowPaymentMessage] = useState(false); // NEW STATE
+    const [showPaymentMessage, setShowPaymentMessage] = useState(false);
 
     // This effect checks the URL for payment success or failure
     useEffect(() => {
@@ -33,7 +33,7 @@ function App() {
         const payment = urlParams.get('payment');
         if (payment) {
             setPaymentStatus(payment);
-            setShowPaymentMessage(true); // SHOW NEW PAYMENT MESSAGE SCREEN
+            setShowPaymentMessage(true);
             // Clean the URL so the message doesn't reappear on refresh
             window.history.replaceState({}, document.title, window.location.pathname);
         }
@@ -87,7 +87,7 @@ function App() {
     };
 
     useEffect(() => {
-        if (!showPaymentMessage) { // ONLY FETCH PLAN IF NOT ON PAYMENT SCREEN
+        if (!showPaymentMessage) {
             fetchUserPlan();
         }
     }, [isAuthenticated, getAccessTokenSilently, API_BASE_URL, showPaymentMessage]);
@@ -230,10 +230,34 @@ function App() {
         }
     };
 
-    const handleReturnToChat = () => { // NEW FUNCTION
+    const handleReturnToChat = () => {
         setShowPaymentMessage(false);
         setPaymentStatus(null);
-        fetchUserPlan(); // Re-fetch plan to update UI
+        fetchUserPlan();
+    };
+
+    // NEW FUNCTION
+    const handleManageSubscription = async () => {
+        try {
+            const accessToken = await getAccessTokenSilently();
+            const response = await fetch(`${API_BASE_URL}/api/create-portal-session`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${accessToken}`,
+                },
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to create portal session');
+            }
+
+            const data = await response.json();
+            window.location.href = data.url;
+        } catch (error) {
+            console.error('Error managing subscription:', error);
+            setError('Could not access the subscription management portal. Please try again later.');
+        }
     };
 
     if (isLoading) {
@@ -251,7 +275,6 @@ function App() {
         );
     }
     
-    // NEW CONDITIONAL RENDER FOR PAYMENT STATUS SCREEN
     if (isAuthenticated && showPaymentMessage) {
         return (
             <div style={{ maxWidth: 600, margin: 'auto', padding: 20, fontFamily: 'Arial, sans-serif', textAlign: 'center' }}>
@@ -289,11 +312,15 @@ function App() {
                 <div style={{ textAlign: 'center', marginBottom: 20 }}>
                     <p>Welcome, {user.name || user.email}!</p>
                     <button onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })} style={{ padding: '10px 20px', backgroundColor: '#dc3545', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Log Out</button>
+                    {userPlan === 'premium' && (
+                        <button onClick={handleManageSubscription} style={{ marginLeft: '10px', padding: '10px 20px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+                            Manage Subscription
+                        </button>
+                    )}
                 </div>
             )}
             {isAuthenticated && (
                 <>
-                    {/* The paymentStatus messages are now handled by the dedicated screen */}
                     {error && <div style={{ color: 'white', backgroundColor: '#dc3545', padding: '10px', borderRadius: '5px', marginBottom: '15px' }}><strong>Error:</strong> {error}</div>}
                     {userPlan === 'loading' && <div style={{ backgroundColor: '#e0e0e0', color: '#333', padding: '10px', borderRadius: '5px', marginBottom: '15px', textAlign: 'center' }}>Checking your plan status...</div>}
                     {userPlan === 'trial' && trialDaysRemaining !== null && trialDaysRemaining > 0 && <div style={{ backgroundColor: '#fff3cd', color: '#856404', border: '1px solid #ffeeba', padding: '10px', borderRadius: '5px', marginBottom: '15px', textAlign: 'center' }}>You are on a free trial! **{trialDaysRemaining} day{trialDaysRemaining !== 1 ? 's' : ''} remaining.**{' '}<a href="#" onClick={(e) => { e.preventDefault(); setShowUpgradeForm(true); }} style={{ color: '#007bff', textDecoration: 'underline' }}>Upgrade now</a></div>}

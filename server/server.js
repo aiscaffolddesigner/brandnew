@@ -603,9 +603,24 @@ app.use(function (err, req, res, next) {
     next(err);
 });
 
-// --- NEW: CATCH-ALL TO SERVE FRONTEND ---
-// Must come AFTER all other API endpoints
-// --- END NEW SECTION ---
+app.post('/api/create-portal-session', checkJwt, ensureUserExists, async (req, res) => {
+    const user = req.userRecord;
+
+    try {
+        const portalSession = await stripe.billingPortal.sessions.create({
+            customer: user.stripeCustomerId,
+            return_url: `${process.env.VITE_APP_API_URL}/profile`, // Replace with your profile page URL
+        });
+
+        res.status(200).json({ url: portalSession.url });
+    } catch (error) {
+        console.error('Error creating portal session:', error);
+        res.status(500).json({
+            error: 'Failed to create a portal session.',
+            details: error.message
+        });
+    }
+});
 
 app.listen(port, () => {
     console.log(`Server listening on port ${port}`);
