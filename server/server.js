@@ -325,33 +325,39 @@ app.get('/api/user-status', checkJwt, ensureUserExists, async (req, res) => {
 
 // NEW: Endpoint to create a Stripe Checkout Session
 app.post('/api/create-checkout-session', checkJwt, ensureUserExists, async (req, res) => {
-    const user = req.userRecord;
-    const YOUR_PRICE_ID = process.env.STRIPE_PREMIUM_PRICE_ID;
+    const user = req.userRecord;
+    const YOUR_PRICE_ID = process.env.STRIPE_PREMIUM_PRICE_ID;
 
-    try {
-        const session = await stripe.checkout.sessions.create({
-            mode: 'subscription',
-            payment_method_types: ['card'],
-            line_items: [{
-                price: YOUR_PRICE_ID,
-                quantity: 1,
-            }],
-            customer: user.stripeCustomerId,
-            success_url: `${process.env.VITE_APP_API_URL}?payment=success`,
-            cancel_url: `${process.env.VITE_APP_API_URL}?payment=cancelled`,
-            metadata: {
-                userId: user._id.toString(),
-            },
-        });
+    // Define URLs based on the environment
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    const redirectUrl = isDevelopment
+        ? 'http://localhost:5173'
+        : process.env.VITE_APP_API_URL;
 
-        res.status(200).json({ id: session.id });
-    } catch (error) {
-        console.error('Error creating Checkout Session:', error);
-        res.status(500).json({
-            error: 'Failed to create Checkout Session.',
-            details: error.message
-        });
-    }
+    try {
+        const session = await stripe.checkout.sessions.create({
+            mode: 'subscription',
+            payment_method_types: ['card'],
+            line_items: [{
+                price: YOUR_PRICE_ID,
+                quantity: 1,
+            }],
+            customer: user.stripeCustomerId,
+            success_url: `${redirectUrl}?payment=success`,
+            cancel_url: `${redirectUrl}?payment=cancelled`,
+            metadata: {
+                userId: user._id.toString(),
+            },
+        });
+
+        res.status(200).json({ id: session.id });
+    } catch (error) {
+        console.error('Error creating Checkout Session:', error);
+        res.status(500).json({
+            error: 'Failed to create Checkout Session.',
+            details: error.message
+        });
+    }
 });
 
 // DEPRECATED: Old endpoints for SetupIntent and subscription are removed.
